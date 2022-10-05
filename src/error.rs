@@ -57,7 +57,6 @@ impl Termination for FireError {
     }
 }
 
-pub fn exit(err: FireError) -> ExitCode {
+pub fn print_error(err: &FireError) {
     eprintln!("{err}");
-    err.report()
 }

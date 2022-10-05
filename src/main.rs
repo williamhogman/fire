@@ -11,8 +11,9 @@ mod template;
 
 use crate::args::Args;
 use crate::dbg::dbg_info;
-use crate::error::exit;
+use crate::error::print_error;
 use crate::format::ContentFormatter;
+use crate::headers::HeaderMap;
 use crate::http::HttpRequest;
 use crate::io::write;
 use crate::io::write_color;
@@ -23,19 +24,18 @@ use crate::prop::Property;
 use crate::template::substitution;
 use clap::Parser;
 use error::FireError;
-use reqwest::blocking::Response;
-use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 use template::SubstitutionError;
 use termcolor::{Color, ColorSpec, StandardStream};
 
-fn main() -> ExitCode {
-    match exec() {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(e) => exit(e),
+fn main() -> Result<(), FireError> {
+    let res = exec();
+    if let Err(err) = &res {
+        print_error(err);
     }
+    res
 }
 
 fn exec() -> Result<(), FireError> {
@@ -51,20 +51,8 @@ fn exec() -> Result<(), FireError> {
     }
 
     // 1. Read file content
-    let file = match std::fs::read_to_string(args.file()) {
-        Ok(file) => file,
-        Err(e) => {
-            return match e.kind() {
-                std::io::ErrorKind::NotFound => {
-                    Err(FireError::FileNotFound(args.file().to_path_buf()))
-                }
-                std::io::ErrorKind::PermissionDenied => {
-                    Err(FireError::NoReadPermission(args.file().to_path_buf()))
-                }
-                _ => Err(FireError::GenericIO(e.to_string())),
-            }
-        }
-    };
+    let path = args.file();
+    let file = std::fs::read_to_string(path).map_err(|e| io_error_to_fire(e, path))?;
     // 2. Read enviroment variables from system environment and extra environments supplied via cli
     // 3. Apply template substitution
     let props: Vec<Property> = args.env().expect("Unable to load env vars");
@@ -85,30 +73,19 @@ fn exec() -> Result<(), FireError> {
 
     let req_headers = request.headers();
 
-    let content_type: Option<&str> =
-        req_headers.get("content-type").map(|h| h.to_str()).map(|v| v.unwrap());
-
     if args.print_request() {
         let title: String = format!("{} {}", request.verb(), request.url().unwrap());
         writeln(&mut stdout, &title);
         let border = "━".repeat(title.len());
         writeln(&mut stdout, &border);
 
-        if args.headers {
-            let mut spec = ColorSpec::new();
-            spec.set_dimmed(true);
-            for (k, v) in &req_headers {
-                writeln_spec(&mut stdout, &format!("{}: {:?}", k.as_str(), v), &spec);
-            }
-            if request.body().is_some() {
-                writeln(&mut stdout, "");
-            }
-        }
-
-        if let Some(body) = request.body() {
-            writeln(&mut stdout, &apply_formatting(&formatters, content_type, body));
-        }
-        writeln(&mut stdout, "");
+        print_http_reqrep(
+            &formatters,
+            &mut stdout,
+            &request.headers(),
+            request.body(),
+            args.headers,
+        );
     }
 
     let req = client
@@ -117,25 +94,15 @@ fn exec() -> Result<(), FireError> {
         .headers(req_headers);
 
     let req = match request.body() {
-        Some(body) => req.body(body.clone()).build().unwrap(),
-        None => req.build().unwrap(),
-    };
+        Some(body) => req.body(body.clone()),
+        None => req,
+    }
+    .build()
+    .unwrap();
 
     let start: Instant = Instant::now();
-    let resp: Result<Response, reqwest::Error> = client.execute(req);
+    let resp = client.execute(req).map_err(reqwest_error_to_fire)?;
     let end: Instant = Instant::now();
-    let resp: Response = match resp {
-        Ok(response) => response,
-        Err(e) => {
-            return if e.is_timeout() {
-                Err(FireError::Timeout(e.url().unwrap().clone()))
-            } else if e.is_connect() {
-                Err(FireError::Connection(e.url().unwrap().clone()))
-            } else {
-                Err(FireError::Other(e.to_string()))
-            }
-        }
-    };
 
     let duration: Duration = end.duration_since(start);
     // 8. Print response if successful, or error, if not
@@ -143,10 +110,7 @@ fn exec() -> Result<(), FireError> {
     let version = resp.version();
     let status = resp.status();
     let headers = resp.headers().clone();
-    let body = match resp.text() {
-        Ok(body) => body,
-        Err(e) => return Err(FireError::Other(e.to_string())),
-    };
+    let body = resp.text().map_err(|e| FireError::Other(e.to_string()))?;
 
     log::debug!("Body of response:\n{body}");
 
@@ -157,11 +121,7 @@ fn exec() -> Result<(), FireError> {
         _ => None,
     };
 
-    let (body_len, unit): (usize, String) = if body.len() >= 1024 {
-        ((body.len() / 1024), String::from("kb"))
-    } else {
-        (body.len(), String::from("b"))
-    };
+    let (body_len, unit) = format_size_unit(&body);
 
     let version: String = format!("{version:?} ");
     write(&mut stdout, &version);
@@ -176,31 +136,62 @@ fn exec() -> Result<(), FireError> {
     let border = "━".repeat(border_len);
     writeln(&mut stdout, &border);
 
-    if args.headers {
-        let mut spec = ColorSpec::new();
-        spec.set_dimmed(true);
-        for (k, v) in headers.clone() {
-            match k {
-                Some(k) => writeln_spec(&mut stdout, &format!("{}: {:?}", k, v), &spec),
-                None => log::warn!("Found header key that was empty or unresolvable"),
-            }
-        }
-        if !body.is_empty() {
-            io::writeln(&mut stdout, "");
-        }
-    }
-
-    if !body.is_empty() {
-        let content_type = headers.get("content-type").and_then(|ct| ct.to_str().ok());
-        let content = apply_formatting(&formatters, content_type, body);
-
-        io::write(&mut stdout, &content);
-        if !content.ends_with('\n') {
-            io::writeln(&mut stdout, "");
-        }
-    }
+    print_http_reqrep(&formatters, &mut stdout, &headers, &Some(body), args.headers);
 
     Ok(())
+}
+
+fn print_http_reqrep(
+    formatters: &[Box<dyn ContentFormatter>],
+    stdout: &mut StandardStream,
+    hm: &HeaderMap,
+    body: &Option<String>,
+    should_print_headers: bool,
+) {
+    let body = body.clone().unwrap_or_default();
+    let has_body = !body.is_empty();
+    if should_print_headers {
+        print_headers(stdout, &hm);
+        if has_body {
+            io::writeln(stdout, "");
+        }
+    }
+    if has_body {
+        let content_type = hm.get("content-type").and_then(|ct| ct.to_str().ok());
+        let content = apply_formatting(&formatters, content_type, body);
+
+        io::write(stdout, &content);
+        if !content.ends_with('\n') {
+            io::writeln(stdout, "");
+        }
+    }
+}
+
+fn format_size_unit(body: &String) -> (usize, &'static str) {
+    if body.len() >= 1024 {
+        ((body.len() / 1024), "kb")
+    } else {
+        (body.len(), "b")
+    }
+}
+
+fn reqwest_error_to_fire(e: reqwest::Error) -> FireError {
+    if e.is_timeout() {
+        FireError::Timeout(e.url().unwrap().clone())
+    } else if e.is_connect() {
+        FireError::Connection(e.url().unwrap().clone())
+    } else {
+        FireError::Other(e.to_string())
+    }
+}
+
+fn io_error_to_fire<P: AsRef<std::path::Path>>(e: std::io::Error, path: P) -> FireError {
+    let path = path.as_ref().to_path_buf();
+    match e.kind() {
+        std::io::ErrorKind::NotFound => FireError::FileNotFound(path),
+        std::io::ErrorKind::PermissionDenied => FireError::NoReadPermission(path),
+        _ => FireError::GenericIO(e.to_string()),
+    }
 }
 
 fn apply_formatting<K: std::string::ToString>(
@@ -213,6 +204,14 @@ fn apply_formatting<K: std::string::ToString>(
         .filter(|fmt| fmt.accept(content_type))
         .fold(body.to_string(), |content, fmt| fmt.format(content).unwrap());
     content
+}
+
+fn print_headers(stdout: &mut StandardStream, header_map: &HeaderMap) {
+    let mut spec = ColorSpec::new();
+    spec.set_dimmed(true);
+    for (k, v) in header_map {
+        writeln_spec(stdout, &format!("{}: {:?}", k.as_str(), v), &spec);
+    }
 }
 
 impl From<SubstitutionError> for FireError {

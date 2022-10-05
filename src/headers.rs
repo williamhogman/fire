@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+pub use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 fn header(key: &str, value: &str) -> (HeaderName, HeaderValue) {
     let k = HeaderName::from_str(key).unwrap();
