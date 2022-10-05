@@ -80,8 +80,8 @@ fn exec() -> Result<(), FireError> {
     // 7. Make (and optionally print) request
     let client = reqwest::blocking::Client::new();
 
-    let syntax_hilighiting: bool = args.use_colors() != termcolor::ColorChoice::Never;
-    let formatters: Vec<Box<dyn ContentFormatter>> = format::formatters(syntax_hilighiting);
+    let syntax_highlighting: bool = args.use_colors() != termcolor::ColorChoice::Never;
+    let formatters: Vec<Box<dyn ContentFormatter>> = format::formatters(syntax_highlighting);
 
     let req_headers = request.headers();
 
@@ -106,12 +106,7 @@ fn exec() -> Result<(), FireError> {
         }
 
         if let Some(body) = request.body() {
-            let content: String = formatters
-                .iter()
-                .filter(|fmt| fmt.accept(content_type))
-                .fold(body.clone(), |content, fmt| fmt.format(content).unwrap());
-
-            writeln(&mut stdout, &content);
+            writeln(&mut stdout, &apply_formatting(&formatters, content_type, body));
         }
         writeln(&mut stdout, "");
     }
@@ -197,10 +192,7 @@ fn exec() -> Result<(), FireError> {
 
     if !body.is_empty() {
         let content_type = headers.get("content-type").and_then(|ct| ct.to_str().ok());
-        let content: String = formatters
-            .iter()
-            .filter(|fmt| fmt.accept(content_type))
-            .fold(body, |content, fmt| fmt.format(content).unwrap());
+        let content = apply_formatting(&formatters, content_type, body);
 
         io::write(&mut stdout, &content);
         if !content.ends_with('\n') {
@@ -209,6 +201,18 @@ fn exec() -> Result<(), FireError> {
     }
 
     Ok(())
+}
+
+fn apply_formatting<K: std::string::ToString>(
+    formatters: &[Box<dyn ContentFormatter>],
+    content_type: Option<&str>,
+    body: K,
+) -> String {
+    let content: String = formatters
+        .iter()
+        .filter(|fmt| fmt.accept(content_type))
+        .fold(body.to_string(), |content, fmt| fmt.format(content).unwrap());
+    content
 }
 
 impl From<SubstitutionError> for FireError {
