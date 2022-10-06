@@ -1,3 +1,4 @@
+use crate::Args;
 use syntect::{
     easy::HighlightLines,
     highlighting::{Style, Theme, ThemeSet},
@@ -5,12 +6,32 @@ use syntect::{
     util::{as_24_bit_terminal_escaped, LinesWithEndings},
 };
 
-pub trait ContentFormatter {
+pub struct SessionFormatter {
+    formatters: Vec<Box<dyn ContentFormatter>>,
+}
+
+impl SessionFormatter {
+    pub fn new(args: &Args) -> Self {
+        let formatters = formatters(args.has_syntax_highlighting());
+        Self { formatters }
+    }
+
+    pub fn apply<K: std::string::ToString>(&self, content_type: Option<&str>, body: K) -> String {
+        let content: String = self
+            .formatters
+            .iter()
+            .filter(|fmt| fmt.accept(content_type))
+            .fold(body.to_string(), |content, fmt| fmt.format(content).unwrap());
+        content
+    }
+}
+
+trait ContentFormatter {
     fn accept(&self, content_type: Option<&str>) -> bool;
     fn format(&self, content: String) -> Result<String, String>;
 }
 
-pub fn formatters(use_colors: bool) -> Vec<Box<dyn ContentFormatter>> {
+fn formatters(use_colors: bool) -> Vec<Box<dyn ContentFormatter>> {
     let mut formatters: Vec<Box<dyn ContentFormatter>> = Vec::with_capacity(4);
     formatters.push(Box::new(JsonPretty::new()));
 
@@ -24,7 +45,7 @@ pub fn formatters(use_colors: bool) -> Vec<Box<dyn ContentFormatter>> {
     formatters
 }
 
-pub struct JsonSyntax {
+struct JsonSyntax {
     syntax_set: SyntaxSet,
     theme: Theme,
 }

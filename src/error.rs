@@ -1,10 +1,18 @@
+use crate::template::SubstitutionError;
+use reqwest::Url;
 use std::error::Error as StdError;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::process::{self, ExitCode, Termination};
 
-use reqwest::Url;
+impl From<SubstitutionError> for FireError {
+    fn from(e: SubstitutionError) -> Self {
+        match e {
+            SubstitutionError::MissingValue(err) => FireError::Template(err),
+        }
+    }
+}
 
 pub trait Error: StdError + Termination {}
 
@@ -18,6 +26,8 @@ pub enum FireError {
     Template(String),
     Other(String),
 }
+
+pub type Result<T, E = FireError> = std::result::Result<T, E>;
 
 impl Debug for FireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -54,6 +64,15 @@ impl Termination for FireError {
             FireError::Template(_) => ExitCode::from(9),
             FireError::Other(_) => ExitCode::from(1),
         }
+    }
+}
+
+pub fn io_error_to_fire<P: AsRef<std::path::Path>>(e: std::io::Error, path: P) -> FireError {
+    let path = path.as_ref().to_path_buf();
+    match e.kind() {
+        std::io::ErrorKind::NotFound => FireError::FileNotFound(path),
+        std::io::ErrorKind::PermissionDenied => FireError::NoReadPermission(path),
+        _ => FireError::GenericIO(e.to_string()),
     }
 }
 

@@ -95,6 +95,9 @@ pub struct Args {
 }
 
 impl Args {
+    pub fn has_syntax_highlighting(&self) -> bool {
+        self.use_colors() != termcolor::ColorChoice::Never
+    }
     pub fn use_colors(&self) -> ColorChoice {
         match (self.enable_colors, self.disable_colors) {
             (true, false) => ColorChoice::Always,

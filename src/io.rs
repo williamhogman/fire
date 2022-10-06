@@ -46,3 +46,13 @@ pub fn write_body(stream: &mut StandardStream, content_type: Option<&str>, body:
     writeln(stream, &format!("\n{body}"));
 }
 
+pub fn print_border(stream: &mut StandardStream, n: usize) {
+    let border = "━".repeat(n);
+    writeln(stream, &border);
+}
+
+pub fn print_heading<S: AsRef<str>>(stream: &mut StandardStream, heading: S) {
+    let heading = heading.as_ref();
+    writeln(stream, heading);
+    print_border(stream, heading.len());
+}

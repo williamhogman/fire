@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::prop::Property;
 
-pub fn substitution(input: String, vars: Vec<Property>) -> Result<String, SubstitutionError> {
+pub fn substitution(input: String, vars: &[Property]) -> Result<String, SubstitutionError> {
     let vars: HashMap<String, String> = merge(vars);
     let mut reg = Handlebars::new();
     reg.register_escape_fn(no_escape);
@@ -20,7 +20,8 @@ pub enum SubstitutionError {
     MissingValue(String),
 }
 
-fn merge(mut maps: Vec<Property>) -> HashMap<String, String> {
+fn merge(maps: &[Property]) -> HashMap<String, String> {
+    let mut maps = maps.to_vec();
     maps.sort();
 
     let vars: HashMap<String, String> = maps
@@ -51,7 +52,7 @@ mod tests {
             Property::new(String::from("key"), String::from("arg"), Source::Arg)?,
         ];
 
-        let vars: HashMap<String, String> = merge(props);
+        let vars: HashMap<String, String> = merge(&props);
         assert_eq!("arg", vars["key"]);
 
         Ok(())

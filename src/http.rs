@@ -1,12 +1,15 @@
-use std::{collections::HashMap, fmt::Display, str::FromStr};
-
+use crate::template::substitution;
+use crate::{
+    error::{io_error_to_fire, FireError, Result},
+    headers::Appendable,
+    prop::Property,
+};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Url,
 };
 use serde::Deserialize;
-
-use crate::headers::Appendable;
+use std::{collections::HashMap, fmt::Display, path::Path, str::FromStr};
 
 #[derive(Debug, Deserialize)]
 pub struct HttpRequest {
@@ -23,6 +26,12 @@ const CONTENT_LENGTH_KEY: &str = "content-length";
 const HOST_KEY: &str = "host";
 
 impl HttpRequest {
+    pub fn from_file<K: AsRef<Path>>(path: K, props: &[Property]) -> Result<HttpRequest> {
+        let raw_content = std::fs::read_to_string(&path).map_err(|e| io_error_to_fire(e, path))?;
+        let content: String = substitution(raw_content, props)?;
+        Self::from_str(&content).map_err(|e| FireError::Template(e.to_string()))
+    }
+
     pub fn verb(&self) -> Verb {
         self.verb
     }
